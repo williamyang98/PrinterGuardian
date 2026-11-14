@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+  <head>
+  <meta charset="utf-8">
+  <title>Bounding box editor</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .drag-box {
+      border: 1px dashed;
+      padding: 40px
+    }
+    .max-w-full {
+      max-width: 100%;
+    }
+    .w-full {
+      width: 100%;
+    }
+    .text-error {
+      color: #dd3030;
+      font-weight: bold;
+    }
+    .overlay {
+      position: relative;
+      display: inline-block; /* shrink-wrap to the image */
+      line-height: 0;
+    }
+    .overlay-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 100;
+    }
+    .flex {
+      display: flex;
+    }
+
+    .clipboard {
+      position: relative;
+    }
+
+    .clipboard pre {
+      display: inline-block;
+      white-space: pre-wrap;
+      font-family: Consolas, monospace;
+      font-size: 14px;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+      min-width: 20rem;
+    }
+
+    .cursor-pointer {
+      cursor: pointer;
+    }
+
+    .clipboard .copy-btn {
+      position: absolute;
+      top: 16px;
+      right: 8px;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 6px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      font-weight: 600;
+    }
+
+    .clipboard .copy-btn.done {
+      background: #a6e3a1; 
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "vue": "https://unpkg.com/vue@3.5.45/dist/vue.esm-browser.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <!--Drag box for image-->
+    <div @dragover="on_dragover" @drop="on_drop">
+      <div class="drag-box" v-if="image_url === null">
+        <span class="text-error" v-if="drag_error">{{ drag_error }}</span>
+        <span v-else>Drop an image here</span>
+      </div>
+      <div v-else class="overlay">
+        <img class="max-w-full" :src="image_url" @load="on_load"/>
+        <canvas class="overlay-canvas" ref="overlay-canvas"/>
+      </div>
+    </div>
+    <!--Controls-->
+    <div v-if="image_url" class="max-w-full">
+      <br>
+      <div class="flex w-full">
+        <!--Settings table-->
+        <div>
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Image width</td><td>{{ image_size.width }}</td></tr>
+              <tr><td>Image height</td><td>{{ image_size.height }}</td></tr>
+              <tr><td>Bbox left</td><td><input type="number" min="0" :max="bbox_right" v-model.number="bbox_left"/></td></tr>
+              <tr><td>Bbox right</td><td><input type="number" :min="bbox_left" :max="image_size.width-1" v-model.number="bbox_right"/></td></tr>
+              <tr><td>Bbox bottom</td><td><input type="number" min="0" :max="bbox_top" v-model.number="bbox_bottom"/></td></tr>
+              <tr><td>Bbox top</td><td><input type="number" :min="bbox_bottom" :max="image_size.height-1" v-model.number="bbox_top"/></td></tr>
+              <tr><td>Total rows</td><td><input type="number" min="1" v-model.number="total_rows"/></td></tr>
+              <tr><td>Total columns</td><td><input type="number" min="1" v-model.number="total_cols"/></td></tr>
+              <tr><td>Overlap-X</td><td><input type="number" min="0" max="0.9" step="0.01" v-model.number="overlap_x"/></td></tr>
+              <tr><td>Overlap-Y</td><td><input type="number" min="0" max="0.9" step="0.01" v-model.number="overlap_y"/></td></tr>
+              <tr><td>Bbox width</td><td>{{ bbox_width }}</td></tr>
+              <tr><td>Bbox height</td><td>{{ bbox_height }}</td></tr>
+              <tr><td>Crops bbox width</td><td>{{ crops.width }}</td></tr>
+              <tr><td>Crops bbox height</td><td>{{ crops.height }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!--Clipboard-->
+        <div class="max-w-full clipboard">
+          <pre class="max-w-full">{{ clipboard_text }}</pre>
+          <button class="copy-btn cursor-pointer" :class="{ done: is_clipboard_copied }" @click="copy_clipboard">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module">
+    import { createApp, ref, computed, useTemplateRef, watch, watchEffect } from "vue";
+    createApp({
+      setup() {
+        const image_url = ref(null);
+        const image_size = ref({
+          width: 0,
+          height: 0,
+        });
+        const drag_error = ref(null);
+        const bbox_left = ref(0);
+        const bbox_right = ref(0);
+        const bbox_bottom = ref(0);
+        const bbox_top = ref(0);
+        const total_rows = ref(2);
+        const total_cols = ref(3);
+        const overlap_x = ref(0.33);
+        const overlap_y = ref(0.33);
+        const canvas_elem = useTemplateRef("overlay-canvas");
+        const canvas_context = ref(null);
+        const bbox_width = computed(() => bbox_right.value-bbox_left.value+1);
+        const bbox_height = computed(() => bbox_top.value-bbox_bottom.value+1);
+
+        const crops = computed(() => {
+          // X = total columns
+          // Y = total rows
+          // W = bbox width
+          // H = bbox height
+          // w = crop width
+          // h = crop height
+          // kx = overlay x
+          // ky = overlay y
+
+          const bbox_width = bbox_right.value-bbox_left.value+1;
+          const bbox_height = bbox_top.value-bbox_bottom.value+1;
+          // W = X*w - (X-1)*kx*w
+          const crop_width = bbox_width/(total_cols.value - (total_cols.value-1)*overlap_x.value);
+          // H = Y*h - (Y-1)*ky*h
+          const crop_height = bbox_height/(total_rows.value - (total_rows.value-1)*overlap_y.value);
+
+          const stride_x = crop_width*(1-overlap_x.value);
+          const stride_y = crop_height*(1-overlap_y.value);
+
+          const bboxes = [];
+          for (let x = 0; x < total_cols.value; x++) {
+            for (let y = 0; y < total_rows.value; y++) {
+              const left = Math.floor(bbox_left.value + x*stride_x);
+              const right = Math.floor(bbox_left.value + x*stride_x + crop_width - 1);
+              const bottom = Math.floor(bbox_bottom.value + y*stride_y);
+              const top = Math.floor(bbox_bottom.value + y*stride_y + crop_height - 1);
+              bboxes.push({
+                left,
+                right,
+                bottom,
+                top,
+              });
+            }
+          }
+          return {
+            bboxes,
+            width: Math.floor(crop_width),
+            height: Math.floor(crop_height),
+          };
+        });
+
+        const clipboard_text = computed(() => {
+          const data = {
+            bbox: {
+              left: bbox_left.value,
+              right: bbox_right.value,
+              bottom: bbox_bottom.value,
+              width: bbox_width.value,
+              height: bbox_height.value,
+            },
+            total_cols: total_cols.value,
+            total_rows: total_rows.value,
+            overlap_x: overlap_x.value,
+            overlap_y: overlap_y.value,
+            crops: crops.value,
+          };
+          const total_spaces = 2;
+          return JSON.stringify(data, null, total_spaces);
+        });
+        const is_clipboard_copied = ref(false);
+        watch(clipboard_text, (_text) => {
+          is_clipboard_copied.value = false;
+        });
+
+        function on_dragover(event) {
+          event.preventDefault();
+        }
+
+        function on_drop(event) {
+          event.preventDefault();
+          const file = event.dataTransfer.files[0];
+          if (file === undefined || file === null) return;
+          if (!file.type.startsWith("image/")) {
+            drag_error.value = `Not an image file got ${file.type}`;
+            return;
+          }
+          drag_error.value = null;
+          image_url.value = URL.createObjectURL(file);
+        }
+
+        function on_load(event) {
+          event.preventDefault();
+          const width = event.target.naturalWidth;
+          const height = event.target.naturalHeight;
+          image_size.value = {
+            width,
+            height,
+          };
+          bbox_left.value = 0;
+          bbox_right.value = width-1;
+          bbox_bottom.value = 0;
+          bbox_top.value = height-1;
+        }
+
+        watch(canvas_elem, (elem) => {
+          if (elem === undefined || elem === null) return;
+          const context = elem.getContext("2d");
+          canvas_context.value = context;
+        });
+
+        watchEffect(() => {
+          const elem = canvas_elem.value;
+          const size = image_size.value;
+          const context = canvas_context.value;
+
+          if (elem === undefined || elem === null) return;
+          if (size === null) return;
+          if (context === null) return;
+
+          elem.width = size.width;
+          elem.height = size.height;
+          elem.style.width = `${size.width}px`;
+          elem.style.height = `${size.height}px`;
+
+          context.clearRect(0, 0, size.width, size.height);
+
+          context.lineWidth = 4;
+          context.strokeStyle = "red";
+          {
+            const bbox_width = bbox_right.value-bbox_left.value+1;
+            const bbox_height = bbox_top.value-bbox_bottom.value+1;
+            context.strokeRect(
+              bbox_left.value, bbox_bottom.value,
+              bbox_width, bbox_height,
+            );
+          }
+
+          const crop_bboxes = crops.value.bboxes;
+          for (let i = crop_bboxes.length-1; i >= 0; i--) {
+            const bbox = crop_bboxes[i];
+            const bbox_width = bbox.right-bbox.left+1;
+            const bbox_height = bbox.top-bbox.bottom+1;
+            context.lineWidth = (i === 0) ? 4 : 2;
+            context.strokeStyle = (i === 0) ? "green" : "blue";
+            context.strokeRect(
+              bbox.left, bbox.bottom,
+              bbox_width, bbox_height,
+            );
+          }
+        });
+
+        async function copy_clipboard(event) {
+          event.preventDefault();
+          try {
+            await navigator.clipboard.writeText(clipboard_text.value);
+          } catch {
+            // fallback for non-secure contexts
+            const elem = document.createElement('textarea');
+            elem.value = clipboard_text.value;
+            document.body.appendChild(elem);
+            elem.select();
+            document.execCommand('copy');
+            document.body.removeChild(elem);
+          }
+          is_clipboard_copied.value = true;
+        }
+
+        return {
+          image_url,
+          image_size,
+          bbox_left,
+          bbox_right,
+          bbox_bottom,
+          bbox_top,
+          total_rows,
+          total_cols,
+          overlap_x,
+          overlap_y,
+          drag_error,
+          bbox_width,
+          bbox_height,
+          crops,
+          clipboard_text,
+          is_clipboard_copied,
+          copy_clipboard,
+          on_dragover,
+          on_drop,
+          on_load,
+        };
+      }
+    }).mount('#app')
+  </script>
+</body>
+</html>
