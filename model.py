@@ -86,7 +86,11 @@ class Model:
         assert batch.dtype == np.float32
         batch_count = batch.shape[0]
 
-        outputs, = self.session.run([self.output_name], { self.input_name: batch })
+        outputs = np.zeros((batch_count, self.embedding_dims), dtype=np.float32)
+        # model was exported with batch_size=1
+        for i in range(batch_count):
+            output, = self.session.run([self.output_name], { self.input_name: batch[i,...][np.newaxis,...] })
+            outputs[i,...] = output[0,...]
 
         L2_distances = np.zeros([batch_count, len(self.class_names)], dtype=np.float32)
         for i, name in enumerate(self.class_names):
@@ -101,7 +105,7 @@ class Model:
 def L2_distances_to_probabilities(L2_distances, temperature=1.0):
     assert len(L2_distances.shape) == 2
     logits = -L2_distances / temperature
-    logits -= np.max(logits, axis=1)
+    logits -= np.max(logits, axis=1)[:,np.newaxis]
     exp_logits = np.exp(logits)
-    probs = exp_logits / np.sum(exp_logits, axis=1)
+    probs = exp_logits / np.sum(exp_logits, axis=1)[:,np.newaxis]
     return probs

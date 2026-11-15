@@ -113,7 +113,7 @@
               <tr><td>Bbox bottom</td><td><input type="number" min="0" :max="bbox_top" v-model.number="bbox_bottom"/></td></tr>
               <tr><td>Bbox top</td><td><input type="number" :min="bbox_bottom" :max="image_size.height-1" v-model.number="bbox_top"/></td></tr>
               <tr><td>Total rows</td><td><input type="number" min="1" v-model.number="total_rows"/></td></tr>
-              <tr><td>Total columns</td><td><input type="number" min="1" v-model.number="total_cols"/></td></tr>
+              <tr><td>Total columns</td><td><input type="number" min="1" v-model.number="total_columns"/></td></tr>
               <tr><td>Overlap-X</td><td><input type="number" min="0" max="0.9" step="0.01" v-model.number="overlap_x"/></td></tr>
               <tr><td>Overlap-Y</td><td><input type="number" min="0" max="0.9" step="0.01" v-model.number="overlap_y"/></td></tr>
               <tr><td>Bbox width</td><td>{{ bbox_width }}</td></tr>
@@ -146,7 +146,7 @@
         const bbox_bottom = ref(0);
         const bbox_top = ref(0);
         const total_rows = ref(2);
-        const total_cols = ref(3);
+        const total_columns = ref(3);
         const overlap_x = ref(0.33);
         const overlap_y = ref(0.33);
         const canvas_elem = useTemplateRef("overlay-canvas");
@@ -167,7 +167,7 @@
           const bbox_width = bbox_right.value-bbox_left.value+1;
           const bbox_height = bbox_top.value-bbox_bottom.value+1;
           // W = X*w - (X-1)*kx*w
-          const crop_width = bbox_width/(total_cols.value - (total_cols.value-1)*overlap_x.value);
+          const crop_width = bbox_width/(total_columns.value - (total_columns.value-1)*overlap_x.value);
           // H = Y*h - (Y-1)*ky*h
           const crop_height = bbox_height/(total_rows.value - (total_rows.value-1)*overlap_y.value);
 
@@ -175,7 +175,7 @@
           const stride_y = crop_height*(1-overlap_y.value);
 
           const bboxes = [];
-          for (let x = 0; x < total_cols.value; x++) {
+          for (let x = 0; x < total_columns.value; x++) {
             for (let y = 0; y < total_rows.value; y++) {
               const left = Math.floor(bbox_left.value + x*stride_x);
               const right = Math.floor(bbox_left.value + x*stride_x + crop_width - 1);
@@ -198,18 +198,19 @@
 
         const clipboard_text = computed(() => {
           const data = {
-            bbox: {
+            parent: {
               left: bbox_left.value,
               right: bbox_right.value,
               bottom: bbox_bottom.value,
+              top: bbox_top.value,
               width: bbox_width.value,
               height: bbox_height.value,
             },
-            total_cols: total_cols.value,
+            total_columns: total_columns.value,
             total_rows: total_rows.value,
             overlap_x: overlap_x.value,
             overlap_y: overlap_y.value,
-            crops: crops.value,
+            children: crops.value.bboxes,
           };
           const total_spaces = 2;
           return JSON.stringify(data, null, total_spaces);
@@ -320,7 +321,7 @@
           bbox_bottom,
           bbox_top,
           total_rows,
-          total_cols,
+          total_columns,
           overlap_x,
           overlap_y,
           drag_error,

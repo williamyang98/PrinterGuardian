@@ -1,0 +1,64 @@
+{
+  "parent": {
+    "left": 0,
+    "right": 1279,
+    "bottom": 0,
+    "top": 719,
+    "width": 1280,
+    "height": 720
+  },
+  "total_columns": 4,
+  "total_rows": 2,
+  "overlap_x": 0.33,
+  "overlap_y": 0.33,
+  "children": [
+    {
+      "left": 0,
+      "right": 424,
+      "bottom": 0,
+      "top": 430
+    },
+    {
+      "left": 0,
+      "right": 424,
+      "bottom": 288,
+      "top": 719
+    },
+    {
+      "left": 284,
+      "right": 709,
+      "bottom": 0,
+      "top": 430
+    },
+    {
+      "left": 284,
+      "right": 709,
+      "bottom": 288,
+      "top": 719
+    },
+    {
+      "left": 569,
+      "right": 994,
+      "bottom": 0,
+      "top": 430
+    },
+    {
+      "left": 569,
+      "right": 994,
+      "bottom": 288,
+      "top": 719
+    },
+    {
+      "left": 854,
+      "right": 1279,
+      "bottom": 0,
+      "top": 430
+    },
+    {
+      "left": 854,
+      "right": 1279,
+      "bottom": 288,
+      "top": 719
+    }
+  ]
+}

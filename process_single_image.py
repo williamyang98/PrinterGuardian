@@ -7,6 +7,10 @@ from PIL import Image
 from model import Model
 import logging
 import os
+import cv2
+
+from detector import DetectorResult
+from bounding_boxes import BoundingBoxSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +25,8 @@ def main():
         return
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("image", type=str, help="Filepath of image")
+    parser.add_argument("image", type=str, help="Filepath of input image")
+    parser.add_argument("--output", type=str, help="Filepath of output image", default="results/single_result.png")
     parser.add_argument("--model", type=str, default="./model/printguard_model_f32.onnx", help="Filepath of onnx model")
     parser.add_argument("--model-metadata", type=str, default="./model/metadata.json", help="Filepath of model metadata")
     parser.add_argument("--model-prototypes", type=str, default="./model/prototypes.json", help="Filepath of model embedding vector prototypes")
@@ -29,6 +34,7 @@ def main():
     parser.add_argument("--provider", type=str, default=DEFAULT_ORT_PROVIDER, choices=ort_providers, help="Onnx runtime inference provider")
     parser.add_argument("--device-id", type=str, default="0", help="Provider device id")
     parser.add_argument("--print-model", action="store_true", help="Print descriptions about the model's inputs and outputs")
+    parser.add_argument("--bbox-config", type=str, default="./configs/centauri_bboxes.json", help="Filepath for bounding box configuration file")
     args = parser.parse_args()
 
     if args.list_providers:
@@ -43,6 +49,9 @@ def main():
 
     with open(args.model_prototypes, "r", encoding="utf-8") as fp:
         model_prototypes = json.load(fp)
+
+    with open(args.bbox_config, "r", encoding="utf-8") as fp:
+        bbox_config_json = json.load(fp)
 
     provider_options = None
     if args.provider != "CPUExecutionProvider":
@@ -64,15 +73,16 @@ def main():
         return
 
     image = Image.open(args.image)
-    image = image.resize((model.input_width, model.input_height), Image.BILINEAR)
     image = image.convert("L")
     image = np.asarray(image) # H,W
     image = image.astype(np.float32) / 255.0
-    batch = image[np.newaxis, ...]
-    batch = model.preprocess_batch(batch)
-    success_probs = model.infer_batch_probabilities(batch)
-    logger.info(f"success={success_probs}")
 
+    bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
+    result = DetectorResult.from_model_and_splitter(image, model, bbox_splitter)
+    probs_threshold = 0.2
+    annotated_frame = result.draw_bboxes(probs_threshold)
+    logger.info(f"Writing result out to {args.output}")
+    cv2.imwrite(args.output, annotated_frame)
 
 if __name__ == "__main__":
     main()
