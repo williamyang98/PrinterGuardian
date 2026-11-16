@@ -9,7 +9,13 @@ from collections.abc import Iterable
 import logging
 import time
 import bisect
+import json
+import pathlib
+import os
 from datetime import datetime
+
+ALARM_JAVASCRIPT_STRING_IMPORT_FILEPATH: pathlib.Path = pathlib.Path(__file__).parent / "alarm.js"
+ALARM_JAVASCRIPT_STRING_IMPORT = ALARM_JAVASCRIPT_STRING_IMPORT_FILEPATH.read_text(encoding="utf-8")
 
 SNAPSHOT_CV2_EXTENSION = ".jpg"
 SNAPSHOT_WEB_MEDIA_TYPE = "image/jpeg"
@@ -94,9 +100,11 @@ class WebApp:
         self.ui_path = ui_path
         self.logger = logging.getLogger("web_app")
 
-        self.probs_threshold = 0.2
+        self.probs_threshold = 0.15
         self.skip_frame_stride = 0
         self.show_bbox = True
+        self.error_raised = False
+        self.alarm_armed = False
 
         self.latest_snapshot = None
         self.failure_snapshots = []
@@ -108,6 +116,7 @@ class WebApp:
         @ui.page(self.ui_path)
         def page():
             self._build_ui()
+            self._changed_error_raised()
             self._build_routes()
 
         app.on_startup(self._start)
@@ -145,7 +154,28 @@ class WebApp:
     def _build_ui(self):
         root = self.ui_path.rstrip("/")
 
-        def create_config_panel():
+        def create_alarm():
+            ui.add_head_html(f"""
+            <script type="module">
+                {ALARM_JAVASCRIPT_STRING_IMPORT}
+                window.g_alarm = new Alarm();
+            </script>
+            """)
+
+            def arm_alarm():
+                ui.run_javascript("window.g_alarm.arm()")
+                self.alarm_armed = True
+                self._changed_error_raised()
+
+            def set_alarm(enabled):
+                if enabled:
+                    ui.run_javascript("window.g_alarm.play()")
+                else:
+                    ui.run_javascript("window.g_alarm.stop()")
+            
+            return arm_alarm, set_alarm
+
+        def create_config_panel(arm_alarm):
             with ui.row():
                 field = ui.number(
                     label="Failure probability detection threshold",
@@ -170,6 +200,14 @@ class WebApp:
                 field = ui.checkbox("Show bounding boxes", on_change=lambda e: self._refresh_svg_bboxes())
                 field.bind_value(self, "show_bbox")
                 field.classes("min-w-10")
+
+                field = ui.checkbox("Error raised", on_change=lambda e: self._changed_error_raised())
+                field.bind_value(self, "error_raised")
+                field.classes("min-w-10")
+
+                button = ui.button("Arm alarm", on_click=arm_alarm).props('''color="red"''')
+                button.bind_visibility_from(self, "alarm_armed", backward=lambda is_armed: not is_armed)
+                ui.notification("⚠️Please arm alarm to receive noise alert⚠️", timeout=None, close_button=True)
 
         def create_table_frame_stats():
             columns = [
@@ -310,7 +348,8 @@ class WebApp:
             return refresh
 
         # layout
-        create_config_panel()
+        arm_alarm, set_alarm = create_alarm()
+        create_config_panel(arm_alarm)
         with ui.tabs().props("inline-label") as tabs:
             tab_latest_snapshot = ui.tab("Latest Preview")
             with ui.tab("Failures") as tab_failures_snapshot:
@@ -328,6 +367,7 @@ class WebApp:
                     image_failure_snapshot_refresh = create_failure_snapshot_image()
 
         # track these handles to refresh
+        self.ui_set_alarm = set_alarm
         self.ui_table_frame_stats_refresh = table_frame_stats_refresh
         self.ui_image_latest_snapshot_refresh = image_latest_snapshot_refresh
         self.ui_image_failure_snapshot_refresh = image_failure_snapshot_refresh
@@ -374,12 +414,26 @@ class WebApp:
         if is_failure:
             self.ui_table_failure_snapshots_refresh()
             self.ui_badge_failure_snapshots_refresh()
+            self.error_raised = True
     
     def _refresh_svg_bboxes(self):
         if not self.is_ui_ready:
             return
         self.ui_image_latest_snapshot_refresh()
         self.ui_image_failure_snapshot_refresh()
+
+    def _changed_error_raised(self):
+        def set_document_title(title):
+            ui.run_javascript(f"document.title = {json.dumps(title)}")
+        if self.error_raised:
+            set_document_title(f"🚨 PRINT ERROR DETECTED 🚨")
+            if self.alarm_armed:
+                self.ui_set_alarm(True)
+            else:
+                ui.notification("❗Print error alarm is silenced please arm alarm to receive noise alert❗", timeout=None, close_button=True)
+        else:
+            set_document_title("Printer Guardian")
+            self.ui_set_alarm(False)
 
     def _build_routes(self):
         root = self.ui_path.rstrip("/")
