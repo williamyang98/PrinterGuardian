@@ -216,6 +216,9 @@ class WebApp:
                 field.bind_value(self, "error_raised")
                 field.classes("min-w-10")
 
+                button = ui.button("Clear Failures", on_click=lambda e: self._clear_failures())
+                button = button.props('''color="red"''')
+
                 alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
                 notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
 
@@ -284,7 +287,7 @@ class WebApp:
                 _event, row, _index = click_event.args
                 # deselect
                 if table.selected and table.selected[0]["frame"] == row["frame"]:
-                    table.selected.clear()
+                    # table.selected.clear() # Actually don't deselect this gets annoying
                     image_refresh()
                 else:
                     table.selected = [row]
@@ -523,6 +526,12 @@ class WebApp:
         else:
             set_document_title("Printer Guardian")
             self.ui_set_alarm(False)
+
+    def _clear_failures(self):
+        self.failure_snapshots = []
+        self.ui_table_failure_snapshots.selected.clear()
+        self.ui_table_failure_snapshots.rows = []
+        self._refresh_ui()
 
     def _build_routes(self):
         root = self.ui_path.rstrip("/")
