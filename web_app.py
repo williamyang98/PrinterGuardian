@@ -116,7 +116,6 @@ class WebApp:
         self.skip_frame_stride = 0
         self.show_bbox = True
         self.error_raised = False
-        self.alarm_armed = False
 
         self.latest_snapshot = None
         self.failure_snapshots = []
@@ -177,7 +176,6 @@ class WebApp:
 
             def arm_alarm():
                 ui.run_javascript("window.g_alarm.arm()")
-                self.alarm_armed = True
                 self._changed_error_raised()
 
             def set_alarm(enabled):
@@ -218,9 +216,8 @@ class WebApp:
                 field.bind_value(self, "error_raised")
                 field.classes("min-w-10")
 
-                button = ui.button("Arm alarm", on_click=arm_alarm).props('''color="red"''')
-                button.bind_visibility_from(self, "alarm_armed", backward=lambda is_armed: not is_armed)
-                ui.notification("⚠️Please arm alarm to receive noise alert⚠️", timeout=None, close_button=True)
+                alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
+                notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
 
         def create_table_frame_stats():
             columns = [
@@ -522,10 +519,7 @@ class WebApp:
             ui.run_javascript(f"document.title = {json.dumps(title)}")
         if self.error_raised:
             set_document_title(f"🚨 PRINT ERROR DETECTED 🚨")
-            if self.alarm_armed:
-                self.ui_set_alarm(True)
-            else:
-                ui.notification("❗Print error alarm is silenced please arm alarm to receive noise alert❗", timeout=None, close_button=True)
+            self.ui_set_alarm(True)
         else:
             set_document_title("Printer Guardian")
             self.ui_set_alarm(False)

@@ -34,9 +34,13 @@ class Alarm {
     arm() {
         this.context.resume();
         this.is_armed = true;
+        console.log("Alarm is now armed");
     }
 
     play() {
+        if (!this.is_armed) {
+            console.warn("Alarm is not armed yet...")
+        }
         this.stop();
         this.source = this.context.createBufferSource();
         this.source.buffer = this.buffer;
@@ -46,6 +50,9 @@ class Alarm {
     }
 
     stop() {
+        if (!this.is_armed) {
+            console.warn("Alarm is not armed yet...")
+        }
         if (this.source === null) return;
         this.source.stop();
         this.source.disconnect();
