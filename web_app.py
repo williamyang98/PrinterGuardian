@@ -216,8 +216,19 @@ class WebApp:
                 field.bind_value(self, "error_raised")
                 field.classes("min-w-10")
 
-                button = ui.button("Clear Failures", on_click=lambda e: self._clear_failures())
-                button = button.props('''color="red"''')
+                async def confirm_clear_failures():
+                    with ui.dialog() as dialog, ui.card() as card:
+                        total_failures = len(self.failure_snapshots)
+                        ui.label(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
+                        with ui.row().classes("w-full justify-end"):
+                            ui.button("Cancel", on_click=lambda: dialog.submit(False)).props("flat")
+                            ui.button("Yes, delete", color="red", on_click=lambda: dialog.submit(True))
+                    if await dialog:
+                        total_failures = len(self.failure_snapshots)
+                        self._clear_failures()
+                        ui.notify(f"Deleted {total_failures} snapshots of failures")
+
+                button = ui.button("Clear Failures", color="red", on_click=confirm_clear_failures)
 
                 alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
                 notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
