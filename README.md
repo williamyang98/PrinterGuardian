@@ -16,6 +16,7 @@ Web application to monitor Elegoo Centauri Carbon's webcam for spaghetti 3D prin
 | Run model on video file or stream | ```python ./process_video_stream.py [url\|path]``` |
 | Run model on single image file | ```python ./process_single_image.py [path]``` |
 | Test Elegoo Centauri Carbon connection | ```python ./test_centauri_connection.py --ip [ip]``` |
+| Configure and export bounding boxes for printer webcam | Open ```./create_bounding_boxes.html``` in a browser |
 
 - For help run: ```python [file] --help```
 - There are test files in ```/data``` which can be used with the above commands
