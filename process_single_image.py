@@ -2,7 +2,6 @@ import onnxruntime as ort
 import argparse
 import numpy as np
 import json
-from tabulate import tabulate
 from PIL import Image
 from model import Model
 import logging
