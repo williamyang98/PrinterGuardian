@@ -26,6 +26,8 @@ def main():
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("video", type=str, help="Filepath or url of video stream")
+    parser.add_argument("--output", type=str, help="Dirpath of output frames", default="results")
+    parser.add_argument("--threshold", type=float, help="Minimum confidence threshold for successful print", default=0.2)
     parser.add_argument("--model", type=str, default="./model/printguard_model_f32.onnx", help="Filepath of onnx model")
     parser.add_argument("--model-metadata", type=str, default="./model/metadata.json", help="Filepath of model metadata")
     parser.add_argument("--model-prototypes", type=str, default="./model/prototypes.json", help="Filepath of model embedding vector prototypes")
@@ -74,16 +76,18 @@ def main():
 
     bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
     detector = Detector(model, args.video, bbox_splitter, allow_drop_frames=args.allow_drop_frames)
+    os.makedirs(args.output, exist_ok=True)
     with detector:
         for frame_number, result in enumerate(detector.get_results_blocking()):
             worst_bbox_index = np.argmin(result.probs)
             worst_probs = result.probs[worst_bbox_index]
             worst_bbox = result.bboxes[worst_bbox_index]
-            probs_threshold = 0.2
+            probs_threshold = args.threshold
             if worst_probs < probs_threshold:
                 logger.info(f"Detected failure frame={frame_number}, probs={worst_probs:.2f}, bbox={worst_bbox}")
                 annotated_frame = result.draw_bboxes(probs_threshold)
-                cv2.imwrite(f"results/frame_{frame_number}.png", annotated_frame)
+                output_filepath = os.path.join(args.output, f"frame_{frame_number}.png")
+                cv2.imwrite(output_filepath, annotated_frame)
 
 if __name__ == "__main__":
     main()

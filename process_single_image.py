@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("image", type=str, help="Filepath of input image")
     parser.add_argument("--output", type=str, help="Filepath of output image", default="results/single_result.png")
+    parser.add_argument("--threshold", type=float, help="Minimum confidence threshold for successful print", default=0.2)
     parser.add_argument("--model", type=str, default="./model/printguard_model_f32.onnx", help="Filepath of onnx model")
     parser.add_argument("--model-metadata", type=str, default="./model/metadata.json", help="Filepath of model metadata")
     parser.add_argument("--model-prototypes", type=str, default="./model/prototypes.json", help="Filepath of model embedding vector prototypes")
@@ -79,7 +80,7 @@ def main():
 
     bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
     result = DetectorResult.from_model_and_splitter(image, model, bbox_splitter)
-    probs_threshold = 0.2
+    probs_threshold = args.threshold
     annotated_frame = result.draw_bboxes(probs_threshold)
     logger.info(f"Writing result out to {args.output}")
     cv2.imwrite(args.output, annotated_frame)
