@@ -81,6 +81,11 @@ def main():
     bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
     result = DetectorResult.from_model_and_splitter(image, model, bbox_splitter)
     probs_threshold = args.threshold
+    print(f"Probabilities")
+    for index, (prob, bbox) in enumerate(zip(result.probs, result.bboxes)):
+        is_failure = prob < probs_threshold
+        prefix = "*" if is_failure else ""
+        print(f"{prefix}[{index}] prob={prob:.3f}, bbox={bbox}")
     annotated_frame = result.draw_bboxes(probs_threshold)
     logger.info(f"Writing result out to {args.output}")
     cv2.imwrite(args.output, annotated_frame)
