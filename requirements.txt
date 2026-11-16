@@ -3,7 +3,7 @@
 onnxruntime-directml==1.24.4
 numpy==2.5.4
 tabulate==0.10.0
-pycentauri==0.9.1
+#pycentauri==0.9.1
 opencv-python==5.0.0.93
 pillow==13.0.0
 fastapi==0.163.1
