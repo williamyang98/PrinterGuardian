@@ -314,13 +314,13 @@ class WebApp:
                 return (text, colour)
             
             text, colour = get_text_and_colour()
-            badge = ui.badge(text, color=colour).props("floating").classes("m-2")
+            badge = ui.badge(text, color=colour)
 
             def refresh():
                 text, colour = get_text_and_colour()
                 badge.set_text(text)
                 badge.set_background_color(colour)
-            return refresh
+            return badge, refresh
         
         def create_failure_snapshots_badge():
             total_failures = len(self.failure_snapshots)
@@ -431,7 +431,9 @@ class WebApp:
         create_config_panel(arm_alarm)
 
         with ui.tabs().props("inline-label") as tabs:
-            tab_latest_snapshot = ui.tab("Latest Preview")
+            with ui.tab("Stream") as tab_latest_snapshot:
+                badge, badge_stream_status_tab_refresh = create_stream_status_badge()
+                badge.classes("ml-2")
             with ui.tab("Failures") as tab_failures_snapshot:
                 badge_failure_snapshots_refresh = create_failure_snapshots_badge()
             with ui.tab("History") as tab_history:
@@ -442,7 +444,8 @@ class WebApp:
                     table_frame_stats_refresh = create_table_frame_stats()
                     with ui.element("div").classes("w-fit relative"):
                         image_latest_snapshot_refresh = create_latest_snapshot_image()
-                        badge_stream_status_refresh = create_stream_status_badge()
+                        badge, badge_stream_status_corner_refresh = create_stream_status_badge()
+                        badge.props("floating").classes("m-2")
             with ui.tab_panel(tab_failures_snapshot):
                 with ui.row():
                     table_failure_snapshots, table_failure_snapshots_refresh = create_table_failure_snapshots()
@@ -464,7 +467,8 @@ class WebApp:
         self.ui_table_failure_snapshots = table_failure_snapshots
         self.ui_table_failure_snapshots_refresh = table_failure_snapshots_refresh
         self.ui_badge_failure_snapshots_refresh = badge_failure_snapshots_refresh
-        self.ui_badge_stream_status_refresh = badge_stream_status_refresh
+        self.ui_badge_stream_status_tab_refresh = badge_stream_status_tab_refresh
+        self.ui_badge_stream_status_corner_refresh = badge_stream_status_corner_refresh
         self.ui_badge_history_count_refresh = badge_history_count_refresh
         self.ui_history_graph = history_graph
         self.ui_history_graph_refresh = history_graph_refresh
@@ -503,7 +507,8 @@ class WebApp:
             return
         self.ui_table_frame_stats_refresh()
         self.ui_image_latest_snapshot_refresh()
-        self.ui_badge_stream_status_refresh()
+        self.ui_badge_stream_status_tab_refresh()
+        self.ui_badge_stream_status_corner_refresh()
         self.ui_badge_history_count_refresh()
         self.ui_history_graph_refresh()
         if is_failure:
