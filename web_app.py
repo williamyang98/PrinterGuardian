@@ -13,6 +13,7 @@ from datetime import datetime
 
 SNAPSHOT_CV2_EXTENSION = ".jpg"
 SNAPSHOT_WEB_MEDIA_TYPE = "image/jpeg"
+SNAPSHOT_ANNOTATE = False
 
 class Snapshot:
     def __init__(self, result: DetectorResult, frame_number: int, probs_threshold: float):
@@ -21,12 +22,69 @@ class Snapshot:
         self.probs_threshold = probs_threshold
         self.unix_time = time.time()
 
-        # frame = (result.frame * 255.0).astype(np.uint8)
-        frame = result.draw_bboxes(threshold=self.probs_threshold)
+        if not SNAPSHOT_ANNOTATE:
+            frame = (result.frame * 255.0).astype(np.uint8)
+        else:
+            frame = result.draw_bboxes(threshold=self.probs_threshold)
         success, image_data = cv2.imencode(SNAPSHOT_CV2_EXTENSION, frame)
         if not success:
             raise Exception(f"Failed to encode frame as {SNAPSHOT_CV2_EXTENSION}")
         self.image_data = image_data.tobytes()
+
+    def create_svg_bboxes(self):
+        result = self.result
+        threshold = self.probs_threshold
+
+        COLOUR_FAILURE = "#d00000"
+        COLOUR_SUCCESS = "#00b000"
+        THICKNESS_FAILURE = 5
+        THICKNESS_SUCCESS = 1
+        FONT_SIZE = 14
+        # svg font weight values
+        # https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/font-weight#values
+        FONT_WEIGHT_SUCCESS = 400
+        FONT_WEIGHT_FAILURE = 700
+        FONT_PADDING = 5
+        FONT_BACKGROUND_COLOUR = "#ffffff"
+
+        svg = []
+        # based off DetectorResults.draw_bboxes()
+        # bboxes
+        for bbox, probs in zip(result.bboxes, result.probs):
+            is_failure = probs < threshold
+            thickness = THICKNESS_FAILURE if is_failure else THICKNESS_SUCCESS
+            colour = COLOUR_FAILURE if is_failure else COLOUR_SUCCESS
+            svg.append(f"""
+            <rect
+                x="{bbox.left}" y="{bbox.bottom}" width="{bbox.width}" height="{bbox.height}"
+                fill="none" stroke="{colour}" stroke-width="{thickness}"
+            />
+            """)
+        # labels for text
+        for bbox, probs in zip(result.bboxes, result.probs):
+            is_failure = probs < threshold
+            font_thickness = FONT_WEIGHT_FAILURE if is_failure else FONT_WEIGHT_SUCCESS
+            colour = COLOUR_FAILURE if is_failure else COLOUR_SUCCESS
+            text = f"{probs:.3f}"
+            # TODO: figure out how to calculate text size properly
+            text_width = FONT_SIZE*len(text)*0.5
+            text_height = FONT_SIZE*0.9
+            position_x = bbox.left + FONT_PADDING
+            position_y = bbox.bottom + text_height + FONT_PADDING
+            svg.append(f"""
+            <rect
+                x="{bbox.left}" y="{bbox.bottom}" width="{2*FONT_PADDING+text_width}" height="{2*FONT_PADDING+text_height}"
+                fill="{FONT_BACKGROUND_COLOUR}"
+            />
+            """)
+            svg.append(f"""
+            <text x="{position_x}" y="{position_y}" fill="{colour}" font-size="{FONT_SIZE}" font-weight="{font_thickness}">
+                {text}
+            </text>
+            """)
+        
+        svg = "\n".join(svg)
+        return svg
 
 class WebApp:
     def __init__(self, model, bbox_splitter: BoundingBoxSplitter, video_path: str, ui_path="/"):
@@ -38,6 +96,8 @@ class WebApp:
 
         self.probs_threshold = 0.2
         self.skip_frame_stride = 0
+        self.show_bbox = True
+
         self.latest_snapshot = None
         self.failure_snapshots = []
         self.is_ui_ready = False
@@ -52,7 +112,7 @@ class WebApp:
 
         app.on_startup(self._start)
         app.on_shutdown(self._shutdown)
-    
+
     def _start(self):
         self.logger.info("Starting web app")
         self.read_results_task = asyncio.create_task(asyncio.to_thread(self._read_results))
@@ -107,6 +167,10 @@ class WebApp:
                 field.bind_value(self.detector, "allow_drop_frames")
                 field.classes("min-w-10")
 
+                field = ui.checkbox("Show bounding boxes", on_change=lambda e: self._refresh_svg_bboxes())
+                field.bind_value(self, "show_bbox")
+                field.classes("min-w-10")
+
         def create_table_frame_stats():
             columns = [
                 { "name": "name", "label": "Name", "field": "name", "required": True },
@@ -153,12 +217,12 @@ class WebApp:
                 row = create_row_from_snapshot(snapshot)
                 rows.append(row)
 
-            pagination = 5
+            pagination = 10
             table = ui.table(
                 columns=columns, rows=rows, row_key="frame",
                 pagination=pagination,
                 selection="single",
-                # on_select=select_failure_snapshot, # Handle this manually with on_row_click
+                # on_select=None, # Handle this manually with on_row_click
             )
             table = table.classes("w-fit")
             table.add_slot("header-selection", "")
@@ -168,15 +232,15 @@ class WebApp:
                     ui.label().props(''':textContent="props.value.toFixed(3)"''')
 
             def on_row_click(click_event):
-                image = self.ui_image_failure_snapshot
+                image_refresh = self.ui_image_failure_snapshot_refresh
                 _event, row, _index = click_event.args
                 # deselect
                 if table.selected and table.selected[0]["frame"] == row["frame"]:
                     table.selected.clear()
-                    image.set_source(None)
+                    image_refresh()
                 else:
                     table.selected = [row]
-                    image.set_source(f"{root}/failure_snapshots/{row["frame"]}")
+                    image_refresh()
             table.on("row-click", on_row_click)
 
             def refresh_table():
@@ -189,7 +253,7 @@ class WebApp:
                         new_rows.append(row)
                     table.add_rows(new_rows)
 
-            return refresh_table
+            return table, refresh_table
         
         def create_stream_status_badge():
             def get_text_and_colour():
@@ -215,6 +279,36 @@ class WebApp:
                 badge.set_text(f"{total_failures}")
             return refresh
 
+        def create_latest_snapshot_image():
+            image = ui.interactive_image(f"{root}/latest_snapshot")
+            def get_svg_content():
+                if self.latest_snapshot != None and self.show_bbox:
+                    svg = self.latest_snapshot.create_svg_bboxes()
+                    return svg
+                return None
+            image.content = get_svg_content()
+            def refresh():
+                image.content = get_svg_content()
+                image.force_reload()
+            return refresh
+        
+        def create_failure_snapshot_image():
+            image = ui.interactive_image()
+            def get_svg_content():
+                if self.selected_failure_snapshot != None and self.show_bbox:
+                    svg = self.selected_failure_snapshot.create_svg_bboxes()
+                    return svg
+                return None
+            def refresh():
+                frame_number = self.selected_failure_snapshot_frame_number 
+                if frame_number == None:
+                    image.set_source(None)
+                    image.content = None
+                else:
+                    image.set_source(f"{root}/failure_snapshots/{frame_number}")
+                    image.content = get_svg_content()
+            return refresh
+
         # layout
         create_config_panel()
         with ui.tabs().props("inline-label") as tabs:
@@ -226,17 +320,18 @@ class WebApp:
             with ui.tab_panel(tab_latest_snapshot):
                 with ui.row():
                     table_frame_stats_refresh = create_table_frame_stats()
-                    image_latest_snapshot = ui.interactive_image(f"{root}/latest_snapshot")
+                    image_latest_snapshot_refresh = create_latest_snapshot_image()
                     badge_stream_status_refresh = create_stream_status_badge()
             with ui.tab_panel(tab_failures_snapshot):
                 with ui.row():
-                    table_failure_snapshots_refresh = create_table_failure_snapshots()
-                    image_failure_snapshot = ui.interactive_image()
+                    table_failure_snapshots, table_failure_snapshots_refresh = create_table_failure_snapshots()
+                    image_failure_snapshot_refresh = create_failure_snapshot_image()
 
         # track these handles to refresh
         self.ui_table_frame_stats_refresh = table_frame_stats_refresh
-        self.ui_image_latest_snapshot = image_latest_snapshot
-        self.ui_image_failure_snapshot = image_failure_snapshot
+        self.ui_image_latest_snapshot_refresh = image_latest_snapshot_refresh
+        self.ui_image_failure_snapshot_refresh = image_failure_snapshot_refresh
+        self.ui_table_failure_snapshots = table_failure_snapshots
         self.ui_table_failure_snapshots_refresh = table_failure_snapshots_refresh
         self.ui_badge_failure_snapshots_refresh = badge_failure_snapshots_refresh
         self.ui_badge_stream_status_refresh = badge_stream_status_refresh
@@ -245,15 +340,46 @@ class WebApp:
         # fallback refresh for sanity
         # ui.timer(1, self._refresh_ui)
 
+    @property
+    def selected_failure_snapshot_frame_number(self):
+        table = self.ui_table_failure_snapshots
+        if not table.selected and len(table.selected) <= 0:
+            return None
+        row = table.selected[0]
+        return row["frame"]
+
+    def get_failure_snapshot_by_frame_number(self, frame_number: int):
+        index = bisect.bisect_left(self.failure_snapshots, frame_number, key=lambda snapshot: snapshot.frame_number)
+        if index < 0 or index >= len(self.failure_snapshots):
+            return None
+        snapshot = self.failure_snapshots[index]
+        # bisect only find insertion location not match
+        if snapshot.frame_number != frame_number:
+            return None
+        return snapshot
+
+    @property
+    def selected_failure_snapshot(self):
+        frame_number = self.selected_failure_snapshot_frame_number 
+        if frame_number == None:
+            return None
+        return self.get_failure_snapshot_by_frame_number(frame_number)
+
     def _refresh_ui(self, is_failure=True):
         if not self.is_ui_ready:
             return
         self.ui_table_frame_stats_refresh()
-        self.ui_image_latest_snapshot.force_reload()
+        self.ui_image_latest_snapshot_refresh()
         self.ui_badge_stream_status_refresh()
         if is_failure:
             self.ui_table_failure_snapshots_refresh()
             self.ui_badge_failure_snapshots_refresh()
+    
+    def _refresh_svg_bboxes(self):
+        if not self.is_ui_ready:
+            return
+        self.ui_image_latest_snapshot_refresh()
+        self.ui_image_failure_snapshot_refresh()
 
     def _build_routes(self):
         root = self.ui_path.rstrip("/")
@@ -265,11 +391,8 @@ class WebApp:
 
         @app.get(f"{root}/failure_snapshots/{{frame_number}}")
         def get_failure_snapshots(frame_number: int):
-            index = bisect.bisect_left(self.failure_snapshots, frame_number, key=lambda snapshot: snapshot.frame_number)
-            if index < 0 or index >= len(self.failure_snapshots):
-                return Response(status_code=404)
-            snapshot = self.failure_snapshots[index]
-            if snapshot.frame_number != frame_number:
+            snapshot = self.get_failure_snapshot_by_frame_number(frame_number)
+            if snapshot == None:
                 return Response(status_code=404)
             return Response(content=snapshot.image_data, media_type=SNAPSHOT_WEB_MEDIA_TYPE)
 
