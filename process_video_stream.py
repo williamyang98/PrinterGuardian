@@ -75,7 +75,19 @@ def main():
         return
 
     bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
-    detector = Detector(model, args.video, bbox_splitter, allow_drop_frames=args.allow_drop_frames)
+
+    def get_video_stream():
+        capture = cv2.VideoCapture(args.video)
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = frame.astype(np.float32) / 255.0
+            yield frame
+    
+    video_stream = get_video_stream()
+    detector = Detector(model, video_stream, bbox_splitter, allow_drop_frames=args.allow_drop_frames)
     os.makedirs(args.output, exist_ok=True)
     with detector:
         for frame_number, result in enumerate(detector.get_results_blocking()):

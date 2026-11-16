@@ -3,6 +3,7 @@ import numpy as np
 import threading
 import logging
 from collections import deque
+from collections.abc import Iterable
 from bounding_boxes import BoundingBoxSplitter, BoundingBox
 from functools import wraps
 import traceback
@@ -88,13 +89,12 @@ class DetectorResult:
         return result
 
 class Detector:
-    def __init__(self, model, video_path, bbox_splitter: BoundingBoxSplitter, allow_drop_frames=False, total_buffer_frames=10, total_buffer_results=10):
+    def __init__(self, model, video_stream: Iterable[np.typing.ArrayLike], bbox_splitter: BoundingBoxSplitter, allow_drop_frames=False, total_buffer_frames=10, total_buffer_results=10):
         self.model = model # ort.InferenceSession
-        self.path = video_path # url or filepath
         self.bbox_splitter = bbox_splitter
         self.allow_drop_frames = allow_drop_frames
 
-        self.stream = cv2.VideoCapture(self.path)
+        self.video_stream = iter(video_stream)
         self.total_frames_read = 0
         self.total_frames_dropped = 0
         self.total_frames_processed = 0
@@ -124,13 +124,19 @@ class Detector:
     @handle_thread_error 
     def _start_capture_thread(self):
         while True:
-            ok, frame = self.stream.read()
-            if not ok:
-                self.logger.error(f"Failed to capture frame from webcam")
+            try:
+                frame = next(self.video_stream)
+            except StopIteration:
+                self.logger.info(f"Video stream ended gracefully")
                 break
+            except Exception as ex:
+                error_trace = traceback.format_exc()
+                self.logger.error(f"Video stream ended abruptly with error: {error_trace}")
+                break
+            
+            assert len(frame.shape) == 2, f"Expected frame to be single channel with shape=[height,width] but got shape=[{','.join(frame.shape)}]"
+            assert frame.dtype == np.float32, f"Expected frame to be floating point grayscale but got dtype={frame.dtype}"
             self.total_frames_read += 1
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame = frame.astype(np.float32) / 255.0
 
             with self.cv_deque_not_full:
                 while len(self.webcam_frames) == self.webcam_frames.maxlen and self.is_frames_deque_open and self.is_processing:
