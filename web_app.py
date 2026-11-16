@@ -21,6 +21,18 @@ SNAPSHOT_CV2_EXTENSION = ".jpg"
 SNAPSHOT_WEB_MEDIA_TYPE = "image/jpeg"
 SNAPSHOT_ANNOTATE = False
 
+class HistoryEntry:
+    def __init__(self, result: DetectorResult, frame_number: int, probs_threshold: float):
+        # discard the frame buffer kept by detector result
+        self.bboxes = result.bboxes
+        self.probs = result.probs
+        self.frame_number = frame_number
+        self.probs_threshold = probs_threshold
+        self.min_probs = np.min(self.probs)
+        self.max_probs = np.max(self.probs)
+        self.mean_probs = np.mean(self.probs)
+        self.unix_time = time.time()
+
 class Snapshot:
     def __init__(self, result: DetectorResult, frame_number: int, probs_threshold: float):
         self.result = result
@@ -108,11 +120,12 @@ class WebApp:
 
         self.latest_snapshot = None
         self.failure_snapshots = []
-        self.is_ui_ready = False
+        self.history = []
 
         video_stream = self.get_video_stream()
         self.detector = Detector(self.model, video_stream, self.bbox_splitter)
 
+        self.is_ui_ready = False
         @ui.page(self.ui_path)
         def page():
             self._build_ui()
@@ -346,25 +359,102 @@ class WebApp:
                     image.set_source(f"{root}/failure_snapshots/{frame_number}")
                     image.content = get_svg_content()
             return refresh
+        
+        def create_history_graph():
+            # Plot by appending data not refreshing the entire plot
+            # https://nicegui.io/documentation/plotly#extending_traces_without_re-sending_the_full_figure
+            INDEX_MIN_PLOT = 0
+            INDEX_MAX_PLOT = 1
+            INDEX_MEAN_PLOT = 2
+            INDEX_THRESHOLD_PLOT = 3
+            INDEX_PLOTS = [INDEX_MIN_PLOT, INDEX_MAX_PLOT, INDEX_MEAN_PLOT, INDEX_THRESHOLD_PLOT]
+            ENTRY_GET_Y = [lambda e: e.min_probs, lambda e: e.max_probs, lambda e: e.mean_probs, lambda e: e.probs_threshold]
+            assert len(INDEX_PLOTS) == len(ENTRY_GET_Y), "Expected number of plots to match number of keys"
+
+            DASH_STYLE = { "dash": "dot", "width": 2 }
+            figure = {
+                "data": [
+                    { "type": "scatter", "name": "min", "x": [], "y": [] },
+                    { "type": "scatter", "name": "max", "x": [], "y": [] },
+                    { "type": "scatter", "name": "mean", "x": [], "y": [] },
+                    { "type": "scatter", "name": "threshold", "x": [], "y": [], "line": DASH_STYLE },
+                ],
+                "layout": {
+                    "margin": { "l": 25, "r": 0, "b": 25, "t": 0 },
+                },
+            }
+
+            def add_points():
+                data = figure["data"]
+                extend_x = []
+                extend_y = []
+                history = self.history[::]
+                for i, entry_get_y in zip(INDEX_PLOTS, ENTRY_GET_Y):
+                    old_x = data[i]["x"]
+                    old_y = data[i]["y"]
+                    new_x = []
+                    new_y = []
+                    total_added = len(history)-len(old_x)
+                    if total_added > 0:
+                        new_entries = history[-total_added:]
+                        for entry in new_entries:
+                            x = entry.frame_number
+                            y = entry_get_y(entry)
+                            old_x.append(x)
+                            old_y.append(y)
+                            new_x.append(x)
+                            new_y.append(y)
+                    extend_x.append(new_x)
+                    extend_y.append(new_y)
+                return extend_x, extend_y, INDEX_PLOTS
+
+            add_points() # initial load
+            plot = ui.plotly(figure).classes("w-full")
+
+            def refresh():
+                extend_x, extend_y, index_plots = add_points()
+                # streams the data to plotly via javascript but can be buggy if plotly is not in focus
+                plot.run_plot_method("extendTraces", {"x": extend_x, "y": extend_y}, index_plots)
+
+            return plot, refresh
+
+        def create_history_count_badge():
+            total_entries = len(self.history)
+            badge = ui.badge(f"{total_entries}", color="blue").classes("ml-2")
+            def refresh():
+                total_entries = len(self.history)
+                badge.set_text(f"{total_entries}")
+            return refresh
 
         # layout
         arm_alarm, set_alarm = create_alarm()
         create_config_panel(arm_alarm)
+
         with ui.tabs().props("inline-label") as tabs:
             tab_latest_snapshot = ui.tab("Latest Preview")
             with ui.tab("Failures") as tab_failures_snapshot:
-                total_failures = len(self.failure_snapshots)
                 badge_failure_snapshots_refresh = create_failure_snapshots_badge()
-        with ui.tab_panels(tabs, value=tab_latest_snapshot):
+            with ui.tab("History") as tab_history:
+                badge_history_count_refresh = create_history_count_badge()
+        with ui.tab_panels(tabs, value=tab_latest_snapshot).classes("w-full"):
             with ui.tab_panel(tab_latest_snapshot):
                 with ui.row():
                     table_frame_stats_refresh = create_table_frame_stats()
-                    image_latest_snapshot_refresh = create_latest_snapshot_image()
-                    badge_stream_status_refresh = create_stream_status_badge()
+                    with ui.element("div").classes("w-fit relative"):
+                        image_latest_snapshot_refresh = create_latest_snapshot_image()
+                        badge_stream_status_refresh = create_stream_status_badge()
             with ui.tab_panel(tab_failures_snapshot):
                 with ui.row():
                     table_failure_snapshots, table_failure_snapshots_refresh = create_table_failure_snapshots()
                     image_failure_snapshot_refresh = create_failure_snapshot_image()
+            with ui.tab_panel(tab_history).classes("w-full"):
+                history_graph, history_graph_refresh = create_history_graph()
+
+        def on_tabs_change(event):
+            # FIXME: plotly doesn't listen to streamed live data when defocused so we need a full update when we switch to it
+            if event.value == tab_history.label:
+                history_graph.update()
+        tabs.on_value_change(on_tabs_change)
 
         # track these handles to refresh
         self.ui_set_alarm = set_alarm
@@ -375,6 +465,9 @@ class WebApp:
         self.ui_table_failure_snapshots_refresh = table_failure_snapshots_refresh
         self.ui_badge_failure_snapshots_refresh = badge_failure_snapshots_refresh
         self.ui_badge_stream_status_refresh = badge_stream_status_refresh
+        self.ui_badge_history_count_refresh = badge_history_count_refresh
+        self.ui_history_graph = history_graph
+        self.ui_history_graph_refresh = history_graph_refresh
         self.is_ui_ready = True
 
         # fallback refresh for sanity
@@ -411,6 +504,8 @@ class WebApp:
         self.ui_table_frame_stats_refresh()
         self.ui_image_latest_snapshot_refresh()
         self.ui_badge_stream_status_refresh()
+        self.ui_badge_history_count_refresh()
+        self.ui_history_graph_refresh()
         if is_failure:
             self.ui_table_failure_snapshots_refresh()
             self.ui_badge_failure_snapshots_refresh()
@@ -455,7 +550,9 @@ class WebApp:
             for frame_number, result in enumerate(self.detector.get_results_blocking()):
                 probs_threshold = self.probs_threshold
                 snapshot = Snapshot(result, frame_number, probs_threshold)
+                history_entry = HistoryEntry(result, frame_number, probs_threshold)
                 self.latest_snapshot = snapshot
+                self.history.append(history_entry)
 
                 worst_bbox_index = np.argmin(result.probs)
                 worst_probs = result.probs[worst_bbox_index]
