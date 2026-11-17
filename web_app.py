@@ -219,19 +219,31 @@ class WebApp:
                 field.bind_value(self, "error_raised")
                 field.classes("min-w-10")
 
-                async def confirm_clear_failures():
+                def create_dialog(message):
                     with ui.dialog() as dialog, ui.card() as card:
-                        total_failures = len(self.failure_snapshots)
-                        ui.label(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
+                        ui.label(message)
                         with ui.row().classes("w-full justify-end"):
                             ui.button("Cancel", on_click=lambda: dialog.submit(False)).props("flat")
                             ui.button("Yes, delete", color="red", on_click=lambda: dialog.submit(True))
+                    return dialog
+
+                async def confirm_clear_failures():
+                    total_failures = len(self.failure_snapshots)
+                    dialog = create_dialog(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
                     if await dialog:
                         total_failures = len(self.failure_snapshots)
                         self._clear_failures()
                         ui.notify(f"Deleted {total_failures} snapshots of failures")
-
                 button = ui.button("Clear Failures", color="red", on_click=confirm_clear_failures)
+
+                async def confirm_clear_history():
+                    total_history = len(self.history)
+                    dialog = create_dialog(f"Are you sure you want to clear entire webcam history with {total_history} snapshots")
+                    if await dialog:
+                        total_history = len(self.history)
+                        self._clear_history()
+                        ui.notify(f"Deleted {total_history} webcam history entries")
+                button = ui.button("Clear History", color="red", on_click=confirm_clear_history)
 
                 alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
                 notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
@@ -399,6 +411,7 @@ class WebApp:
 
             def add_points():
                 data = figure["data"]
+                full_refresh = False
                 extend_x = []
                 extend_y = []
                 history = self.history[::]
@@ -417,17 +430,25 @@ class WebApp:
                             old_y.append(y)
                             new_x.append(x)
                             new_y.append(y)
+                    elif total_added < 0:
+                        total_removed = -total_added
+                        del old_x[-total_removed:]
+                        del old_y[-total_removed:]
+                        full_refresh = True # if remove entries from trace
                     extend_x.append(new_x)
                     extend_y.append(new_y)
-                return extend_x, extend_y, INDEX_PLOTS
+                return full_refresh, extend_x, extend_y, INDEX_PLOTS
 
             add_points() # initial load
             plot = ui.plotly(figure).classes("w-full")
 
             def refresh():
-                extend_x, extend_y, index_plots = add_points()
-                # streams the data to plotly via javascript but can be buggy if plotly is not in focus
-                plot.run_plot_method("extendTraces", {"x": extend_x, "y": extend_y}, index_plots)
+                full_refresh, extend_x, extend_y, index_plots = add_points()
+                if not full_refresh:
+                    # streams the data to plotly via javascript but can be buggy if plotly is not in focus
+                    plot.run_plot_method("extendTraces", {"x": extend_x, "y": extend_y}, index_plots)
+                else:
+                    plot.update()
 
             return plot, refresh
 
@@ -549,6 +570,11 @@ class WebApp:
         self.failure_snapshots = []
         self.ui_table_failure_snapshots.selected.clear()
         self.ui_table_failure_snapshots.rows = []
+        self._refresh_ui()
+
+    def _clear_history(self):
+        self.history = []
+        self.ui_history_graph_refresh()
         self._refresh_ui()
 
     def _build_routes(self):
