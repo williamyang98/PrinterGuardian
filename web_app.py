@@ -508,8 +508,8 @@ class WebApp:
         self.ui_history_graph_refresh = history_graph_refresh
         self.is_ui_ready = True
 
-        # fallback refresh for sanity
-        # ui.timer(1, self._refresh_ui)
+        # small updates that can be done semi-frequently with low overhead
+        ui.timer(1, self._refresh_badges)
 
     @property
     def selected_failure_snapshot_frame_number(self):
@@ -549,6 +549,14 @@ class WebApp:
             self.ui_table_failure_snapshots_refresh()
             self.ui_badge_failure_snapshots_refresh()
             self.error_raised = True
+    
+    def _refresh_badges(self):
+        if not self.is_ui_ready:
+            return
+        self.ui_badge_failure_snapshots_refresh()
+        self.ui_badge_stream_status_tab_refresh()
+        self.ui_badge_stream_status_corner_refresh()
+        self.ui_badge_history_count_refresh()
     
     def _refresh_svg_bboxes(self):
         if not self.is_ui_ready:
