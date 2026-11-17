@@ -12,6 +12,9 @@ import pathlib
 import os
 from datetime import datetime
 import asyncstdlib as a
+import traceback
+from enum import Enum
+import queue
 
 from detector import Detector, DetectorResult
 from bounding_boxes import BoundingBoxSplitter
@@ -22,6 +25,10 @@ ALARM_JAVASCRIPT_STRING_IMPORT = ALARM_JAVASCRIPT_STRING_IMPORT_FILEPATH.read_te
 SNAPSHOT_CV2_EXTENSION = ".jpg"
 SNAPSHOT_WEB_MEDIA_TYPE = "image/jpeg"
 SNAPSHOT_ANNOTATE = False
+
+class VideoStreamCommand(Enum):
+    RECONNECT = 0
+    TERMINATE = 1
 
 class HistoryEntry:
     def __init__(self, result: DetectorResult, frame_number: int, probs_threshold: float):
@@ -123,10 +130,14 @@ class WebApp:
         self.failure_snapshots = []
         self.history = []
 
-        video_stream = self.get_video_stream()
+        self.video_stream_commands = queue.Queue(maxsize=1) # VideoStreamCommand
+        self.is_stream_live = False
+        self.video_stream_disconnects = 0
+        video_stream = self._get_video_stream()
         self.detector = Detector(self.model, video_stream, self.bbox_splitter)
 
         self.is_ui_ready = False
+        self.is_shutting_down = False
         @ui.page(self.ui_path)
         def page():
             self._build_ui()
@@ -138,33 +149,63 @@ class WebApp:
 
     def _start(self):
         self.logger.info("Starting web app")
+        self._video_stream_send_command(VideoStreamCommand.RECONNECT)
         self.read_results_task = asyncio.create_task(self._read_results())
 
     async def _shutdown(self):
         self.logger.info("Shutting down web app...")
+        self.is_shutting_down = True
         self.detector.stop(force=True)
+        self._video_stream_send_command(VideoStreamCommand.TERMINATE)
+        self.video_stream_commands.shutdown(immediate=True),
         await asyncio.gather(
             self.read_results_task,
             self.detector.wait_finished(),
         )
         self.logger.info("Finished shutting down web app")
-    
-    def get_video_stream(self):
-        total_skipped_frames = 0
-        capture = cv2.VideoCapture(self.video_path)
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
 
-            if total_skipped_frames < self.skip_frame_stride:
-                total_skipped_frames += 1
-                continue
+    def _video_stream_send_command(self, command: VideoStreamCommand):
+        if self.video_stream_commands.full():
+            self.video_stream_commands.get()
+        self.video_stream_commands.put(command)
 
+    def _get_video_stream(self):
+        def connect_and_read():
             total_skipped_frames = 0
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame = frame.astype(np.float32) / 255.0
-            yield frame
+            capture = cv2.VideoCapture(self.video_path)
+            while not self.is_shutting_down:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+
+                if total_skipped_frames < self.skip_frame_stride:
+                    total_skipped_frames += 1
+                    continue
+
+                total_skipped_frames = 0
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = frame.astype(np.float32) / 255.0
+                yield frame
+            capture.release()
+
+        try:
+            while True:
+                command = self.video_stream_commands.get(block=True)
+                if command == VideoStreamCommand.RECONNECT:
+                    try:
+                        self.is_stream_live = True
+                        for frame in connect_and_read():
+                            yield frame
+                    except Exception as ex:
+                        error_trace = traceback.format_exc()
+                        self.logger.error(f"Failed to acquire webcam frame due to unhandled error: {error_trace}")
+                    finally:
+                        self.is_stream_live = False
+                        self.video_stream_disconnects += 1
+                elif command == VideoStreamCommand.TERMINATE:
+                    break
+        except queue.ShutDown:
+            self.logger.info("Forcefully closed down video stream")
 
     def _build_ui(self):
         root = self.ui_path.rstrip("/")
@@ -245,6 +286,9 @@ class WebApp:
                         ui.notify(f"Deleted {total_history} webcam history entries")
                 button = ui.button("Clear History", color="red", on_click=confirm_clear_history)
 
+                button = ui.button("Reconnect Camera", color="blue", on_click=lambda: self._video_stream_send_command(VideoStreamCommand.RECONNECT))
+                button = button.bind_visibility_from(self, "is_stream_live", backward=lambda is_live: not is_live)
+
                 alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
                 notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
 
@@ -258,6 +302,7 @@ class WebApp:
                     { "name": "frames_read", "value": self.detector.total_frames_read },
                     { "name": "frames_dropped", "value": self.detector.total_frames_dropped },
                     { "name": "frames_processed", "value": self.detector.total_frames_processed },
+                    { "name": "webcam_disconnects", "value": self.video_stream_disconnects },
                 ]
             rows = create_rows()
             table = ui.table(columns=columns, rows=rows, row_key="name")
@@ -333,9 +378,8 @@ class WebApp:
         
         def create_stream_status_badge():
             def get_text_and_colour():
-                is_live = self.detector.is_capturing
-                text = "Live" if is_live else "Offline"
-                colour = "green" if is_live else "red"
+                text = "Live" if self.is_stream_live else "Offline"
+                colour = "green" if self.is_stream_live else "red"
                 return (text, colour)
             
             text, colour = get_text_and_colour()
@@ -509,7 +553,7 @@ class WebApp:
         self.is_ui_ready = True
 
         # small updates that can be done semi-frequently with low overhead
-        ui.timer(1, self._refresh_badges)
+        ui.timer(1, self._refresh_lightweight)
 
     @property
     def selected_failure_snapshot_frame_number(self):
@@ -550,9 +594,10 @@ class WebApp:
             self.ui_badge_failure_snapshots_refresh()
             self.error_raised = True
     
-    def _refresh_badges(self):
+    def _refresh_lightweight(self):
         if not self.is_ui_ready:
             return
+        self.ui_table_frame_stats_refresh()
         self.ui_badge_failure_snapshots_refresh()
         self.ui_badge_stream_status_tab_refresh()
         self.ui_badge_stream_status_corner_refresh()
