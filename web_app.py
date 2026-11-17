@@ -260,17 +260,22 @@ class WebApp:
                 field.bind_value(self, "error_raised")
                 field.classes("min-w-10")
 
-                def create_dialog(message):
-                    with ui.dialog() as dialog, ui.card() as card:
-                        ui.label(message)
-                        with ui.row().classes("w-full justify-end"):
-                            ui.button("Cancel", on_click=lambda: dialog.submit(False)).props("flat")
-                            ui.button("Yes, delete", color="red", on_click=lambda: dialog.submit(True))
-                    return dialog
+                alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
+                notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
 
+        def create_delete_dialog(message):
+            with ui.dialog() as dialog, ui.card() as card:
+                ui.label(message)
+                with ui.row().classes("w-full justify-end"):
+                    ui.button("Cancel", on_click=lambda: dialog.submit(False)).props("flat")
+                    ui.button("Yes, delete", color="red", on_click=lambda: dialog.submit(True))
+            return dialog
+
+        def create_button_controls():
+            with ui.row():
                 async def confirm_clear_failures():
                     total_failures = len(self.failure_snapshots)
-                    dialog = create_dialog(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
+                    dialog = create_delete_dialog(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
                     if await dialog:
                         total_failures = len(self.failure_snapshots)
                         self._clear_failures()
@@ -279,7 +284,7 @@ class WebApp:
 
                 async def confirm_clear_history():
                     total_history = len(self.history)
-                    dialog = create_dialog(f"Are you sure you want to clear entire webcam history with {total_history} snapshots")
+                    dialog = create_delete_dialog(f"Are you sure you want to clear entire webcam history with {total_history} snapshots")
                     if await dialog:
                         total_history = len(self.history)
                         self._clear_history()
@@ -288,9 +293,6 @@ class WebApp:
 
                 button = ui.button("Reconnect Camera", color="blue", on_click=lambda: self._video_stream_send_command(VideoStreamCommand.RECONNECT))
                 button = button.bind_visibility_from(self, "is_stream_live", backward=lambda is_live: not is_live)
-
-                alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
-                notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
 
         def create_table_frame_stats():
             columns = [
@@ -507,6 +509,7 @@ class WebApp:
         # layout
         arm_alarm, set_alarm = create_alarm()
         create_config_panel(arm_alarm)
+        create_button_controls()
 
         with ui.tabs().props("inline-label") as tabs:
             with ui.tab("Stream") as tab_latest_snapshot:
