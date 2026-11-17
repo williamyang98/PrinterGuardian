@@ -129,6 +129,7 @@ class WebApp:
         self.latest_snapshot = None
         self.failure_snapshots = []
         self.history = []
+        self.total_frames_skipped = 0
 
         self.video_stream_commands = queue.Queue(maxsize=1) # VideoStreamCommand
         self.is_stream_live = False
@@ -180,6 +181,7 @@ class WebApp:
 
                 if total_skipped_frames < self.skip_frame_stride:
                     total_skipped_frames += 1
+                    self.total_frames_skipped += 1
                     continue
 
                 total_skipped_frames = 0
@@ -237,7 +239,7 @@ class WebApp:
                     min=0, max=1, step=0.01,
                     format="%.3f",
                 )
-                field.bind_value(self, "probs_threshold")
+                field.bind_value(self, "probs_threshold", forward=lambda v: v if v != None else 0)
                 field.classes("min-w-60")
 
                 field = ui.number(
@@ -245,7 +247,7 @@ class WebApp:
                     min=0, step=1,
                     format="%d",
                 )
-                field.bind_value(self, "skip_frame_stride")
+                field.bind_value(self, "skip_frame_stride", forward=lambda v: v if v != None else 0)
                 field.classes("min-w-10")
 
                 field = ui.checkbox("Allow dropping frames")
@@ -304,6 +306,7 @@ class WebApp:
                     { "name": "frames_read", "value": self.detector.total_frames_read },
                     { "name": "frames_dropped", "value": self.detector.total_frames_dropped },
                     { "name": "frames_processed", "value": self.detector.total_frames_processed },
+                    { "name": "frames_skipped", "value": self.total_frames_skipped },
                     { "name": "webcam_disconnects", "value": self.video_stream_disconnects },
                 ]
             rows = create_rows()
