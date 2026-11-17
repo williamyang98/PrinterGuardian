@@ -198,17 +198,15 @@ class Detector:
                     continue
                 with self.cv_results_available:
                     result = self.results.popleft()
-                yield result
+            yield result
     
     def force_stop(self):
-        self.is_frames_deque_open = False
-        self.is_capturing = False
-        self.is_processing = False
-        with self.cv_frames_available:
+        with self.cv_frames_available, self.cv_deque_not_full, self.cv_results_available:
+            self.is_frames_deque_open = False
+            self.is_capturing = False
+            self.is_processing = False
             self.cv_frames_available.notify()
-        with self.cv_deque_not_full:
             self.cv_deque_not_full.notify()
-        with self.cv_results_available:
             self.cv_results_available.notify()
     
     def wait_finished(self):
