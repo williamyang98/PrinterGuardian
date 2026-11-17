@@ -583,7 +583,7 @@ class WebApp:
             return None
         return self.get_failure_snapshot_by_frame_number(frame_number)
 
-    def _refresh_ui(self, is_failure=True):
+    def _refresh_ui(self, is_failure=False):
         if not self.is_ui_ready:
             return
         self.ui_table_frame_stats_refresh()
