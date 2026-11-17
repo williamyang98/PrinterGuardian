@@ -6,6 +6,8 @@ from model import Model
 import logging
 import os
 import cv2
+import asyncio
+import asyncstdlib as a
 
 from detector import Detector
 from bounding_boxes import BoundingBoxSplitter
@@ -13,7 +15,7 @@ from bounding_boxes import BoundingBoxSplitter
 
 logger = logging.getLogger(__name__)
 
-def main():
+async def main():
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=log_level)
 
@@ -88,8 +90,8 @@ def main():
     video_stream = get_video_stream()
     detector = Detector(model, video_stream, bbox_splitter, allow_drop_frames=args.allow_drop_frames)
     os.makedirs(args.output, exist_ok=True)
-    with detector:
-        for frame_number, result in enumerate(detector.get_results_blocking()):
+    async with detector:
+        async for frame_number, result in a.enumerate(detector.get_results()):
             worst_bbox_index = np.argmin(result.probs)
             worst_probs = result.probs[worst_bbox_index]
             worst_bbox = result.bboxes[worst_bbox_index]
@@ -101,4 +103,4 @@ def main():
                 cv2.imwrite(output_filepath, annotated_frame)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

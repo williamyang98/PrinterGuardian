@@ -1,29 +1,12 @@
 import cv2
 import numpy as np
-import threading
 import logging
-from collections import deque
 from collections.abc import Iterable
-from bounding_boxes import BoundingBoxSplitter, BoundingBox
-from functools import wraps
 import traceback
+import asyncio
 
-def handle_thread_error(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        try:
-            with self.cv_thread_count:
-                self.total_threads_running += 1
-            return func(self, *args, **kwargs)
-        except Exception as ex:
-            error_trace = traceback.format_exc()
-            self.logger.error(f"Thread {func.__name__} exited with unhandled error: {error_trace}")
-            self.force_stop()
-        finally:
-            with self.cv_thread_count:
-                self.total_threads_running -= 1
-                self.cv_thread_count.notify_all()
-    return wrapper
+from bounding_boxes import BoundingBoxSplitter, BoundingBox
+
 
 class DetectorResult:
     def __init__(self, frame: np.typing.ArrayLike, bboxes: list[BoundingBox], probs: np.typing.ArrayLike):
@@ -90,6 +73,7 @@ class DetectorResult:
 
 class Detector:
     def __init__(self, model, video_stream: Iterable[np.typing.ArrayLike], bbox_splitter: BoundingBoxSplitter, allow_drop_frames=False, total_buffer_frames=10, total_buffer_results=10):
+        self.logger = logging.getLogger("detector")
         self.model = model # ort.InferenceSession
         self.bbox_splitter = bbox_splitter
         self.allow_drop_frames = allow_drop_frames
@@ -98,134 +82,108 @@ class Detector:
         self.total_frames_read = 0
         self.total_frames_dropped = 0
         self.total_frames_processed = 0
-    
-        self.webcam_frames = deque(maxlen=total_buffer_frames) # item = np.array(shape=[H,W], dtype=np.float32)
-        self.results = deque(maxlen=total_buffer_results) # item = DetectorResult
 
-        self.lock_frames_deque = threading.RLock()
-        self.is_frames_deque_open = False
+        self.webcam_frames = asyncio.Queue(maxsize=total_buffer_frames) # item = np.array(shape=[H,W], dtype=np.float32)
+        self.results = asyncio.Queue(maxsize=total_buffer_results) # item = DetectorResult
+
         self.is_capturing = False
         self.is_processing = False
-        self.cv_frames_available = threading.Condition(lock=self.lock_frames_deque)
-        self.cv_deque_not_full = threading.Condition(lock=self.lock_frames_deque)
-        self.cv_results_available = threading.Condition()
-
-        self.total_threads_running = 0
-        self.cv_thread_count = threading.Condition()
-
-        self.logger = logging.getLogger("detector")
-        self.capture_thread = None
-        self.processing_thread = None
+        self.capture_task = None
+        self.processing_task = None
     
-    @property
-    def is_running(self):
-        return self.total_threads_running > 0
+    async def _start_capture_task(self):
+        try:
+            self.is_capturing = True
+            while True:
+                try:
+                    # https://peps.python.org/pep-0479/
+                    # PEP479 - StopIteration exception not supported in Futures
+                    # frame = await asyncio.to_thread(lambda: next(self.video_stream))
+                    frame = await asyncio.to_thread(lambda: next(self.video_stream, None))
+                    if frame is None:
+                        self.logger.info(f"Video stream ended gracefully")
+                        break
+                except Exception as ex:
+                    error_trace = traceback.format_exc()
+                    self.logger.error(f"Video stream ended abruptly with error: {error_trace}")
+                    break
+            
+                assert len(frame.shape) == 2, f"Expected frame to be single channel with shape=[height,width] but got shape=[{','.join(frame.shape)}]"
+                assert frame.dtype == np.float32, f"Expected frame to be floating point grayscale but got dtype={frame.dtype}"
+                self.total_frames_read += 1
 
-    @handle_thread_error 
-    def _start_capture_thread(self):
+                try:
+                    if self.webcam_frames.full() and self.allow_drop_frames:
+                        self.webcam_frames.get_nowait()
+                        self.webcam_frames.put_nowait(frame)
+                        self.total_frames_dropped += 1
+                    else:
+                        await self.webcam_frames.put(frame)
+                except asyncio.QueueShutDown:
+                    self.logger.info("Capture task exiting since webcam frames queue was shutdown")
+                    break
+        except Exception as ex:
+            error_trace = traceback.format_exc()
+            self.logger.error(f"Capture exited with unhandled error: {error_trace}")
+            self.stop(force=True)
+        finally:
+            self.is_capturing = False
+            self.logger.info(f"Stopped webcam capture task after total_frames_read={self.total_frames_read}, total_frames_dropped={self.total_frames_dropped}")
+            self.webcam_frames.shutdown(immediate=False) # trickle left overs
+
+    async def _start_processing_task(self):
+        try:
+            self.is_processing = True
+            while True:
+                try:
+                    frame = await self.webcam_frames.get()
+                except asyncio.QueueShutDown:
+                    self.logger.info("Processing task exiting since webcam frames queue was shutdown")
+                    break
+                
+                result = await asyncio.to_thread(lambda: DetectorResult.from_model_and_splitter(frame, self.model, self.bbox_splitter))
+                self.total_frames_processed += 1
+
+                try:
+                    await self.results.put(result)
+                except asyncio.QueueShutDown:
+                    self.logger.info("Processing task exiting since results queue was shutdown")
+                    break
+        except Exception as ex:
+            error_trace = traceback.format_exc()
+            self.logger.error(f"Processing task exited with unhandled error: {error_trace}")
+            self.stop(force=True)
+        finally:
+            self.is_processing = False
+            self.logger.info(f"Stopped frame processing task after total_frames_processed={self.total_frames_processed}")
+            self.results.shutdown(immediate=False) # trickle left overs
+
+    async def get_results(self):
         while True:
             try:
-                frame = next(self.video_stream)
-            except StopIteration:
-                self.logger.info(f"Video stream ended gracefully")
+                result = await self.results.get()
+                yield result
+            except asyncio.QueueShutDown:
                 break
-            except Exception as ex:
-                error_trace = traceback.format_exc()
-                self.logger.error(f"Video stream ended abruptly with error: {error_trace}")
-                break
-            
-            assert len(frame.shape) == 2, f"Expected frame to be single channel with shape=[height,width] but got shape=[{','.join(frame.shape)}]"
-            assert frame.dtype == np.float32, f"Expected frame to be floating point grayscale but got dtype={frame.dtype}"
-            self.total_frames_read += 1
-
-            with self.cv_deque_not_full:
-                while len(self.webcam_frames) == self.webcam_frames.maxlen and self.is_frames_deque_open and self.is_processing:
-                    if self.allow_drop_frames:
-                        self.total_frames_dropped += 1
-                        break
-                    else:
-                        self.cv_deque_not_full.wait()
-                with self.cv_frames_available:
-                    self.webcam_frames.append(frame)
-                    self.cv_frames_available.notify()
-                if not self.is_frames_deque_open:
-                    break
-                if not self.is_processing:
-                    break
-
-        self.logger.info(f"Closed webcam capture thread gracefully total_frames_read={self.total_frames_read}, total_frames_dropped={self.total_frames_dropped}")
-        with self.cv_frames_available:
-            self.is_capturing = False
-            self.cv_frames_available.notify()
-
-    @handle_thread_error 
-    def _start_processing_thread(self):
-        while True:
-            with self.cv_frames_available:
-                while len(self.webcam_frames) == 0 and self.is_frames_deque_open and self.is_capturing:
-                    self.cv_frames_available.wait()
-                if not self.is_frames_deque_open:
-                    break
-                if not self.is_capturing and len(self.webcam_frames) == 0:
-                    break
-                if len(self.webcam_frames) == 0:
-                    continue
-                with self.cv_deque_not_full:
-                    frame = self.webcam_frames.popleft()
-                    self.cv_deque_not_full.notify()
-
-            result = DetectorResult.from_model_and_splitter(frame, self.model, self.bbox_splitter)
-            self.total_frames_processed += 1
-
-            with self.cv_results_available:
-                self.results.append(result)
-                self.cv_results_available.notify()
-        self.logger.info(f"Stopped frame processing thread after total_frames_processed={self.total_frames_processed}")
-
-        with (self.cv_deque_not_full, self.cv_results_available):
-            self.is_processing = False
-            self.cv_deque_not_full.notify()
-            self.cv_results_available.notify()
-
-    def get_results_blocking(self):
-        while True:
-            with self.cv_results_available:
-                while len(self.results) == 0 and self.is_processing:
-                    self.cv_results_available.wait()
-                if not self.is_processing and len(self.results) == 0:
-                    break
-                if len(self.results) == 0:
-                    continue
-                with self.cv_results_available:
-                    result = self.results.popleft()
-            yield result
     
-    def force_stop(self):
-        with self.cv_frames_available, self.cv_deque_not_full, self.cv_results_available:
-            self.is_frames_deque_open = False
-            self.is_capturing = False
-            self.is_processing = False
-            self.cv_frames_available.notify()
-            self.cv_deque_not_full.notify()
-            self.cv_results_available.notify()
+    def stop(self, force=False):
+        self.webcam_frames.shutdown(immediate=force)
+        self.results.shutdown(immediate=force)
     
-    def wait_finished(self):
-        with self.cv_thread_count:
-            while self.total_threads_running > 0:
-                self.cv_thread_count.wait()
+    async def wait_finished(self):
+        assert self.capture_task != None, "Capture task not started yet"
+        assert self.processing_task != None, "Processing task not started yet"
+        await asyncio.gather(self.capture_task, self.processing_task)
 
-    def __enter__(self):
-        assert not self.is_frames_deque_open, "Tried to open an active detector again"
+    async def __aenter__(self):
+        assert self.capture_task == None, "Already running capture task"
+        assert self.processing_task == None, "Already running processing task"
+        self.capture_task = asyncio.create_task(self._start_capture_task())
+        self.processing_task = asyncio.create_task(self._start_processing_task())
 
-        self.is_frames_deque_open = True
-        self.capture_thread = threading.Thread(target=self._start_capture_thread)
-        self.processing_thread = threading.Thread(target=self._start_processing_thread)
-        self.is_capturing = True
-        self.is_processing = True
-        self.capture_thread.start()
-        self.processing_thread.start()
-
-    def __exit__(self, exception_type, exception_value, exception_traceback): 
-        self.force_stop()
-        self.capture_thread.join()
-        self.processing_thread.join()
+    async def __aexit__(self, exception_type, exception_value, exception_traceback): 
+        assert self.capture_task != None, "Failed to get running capture task"
+        assert self.processing_task != None, "Failed to get running processing task"
+        self.stop(force=True)
+        await self.capture_task
+        await self.processing_task

@@ -1,7 +1,5 @@
 from fastapi import Response
 from nicegui import app, ui
-from detector import Detector, DetectorResult
-from bounding_boxes import BoundingBoxSplitter
 import asyncio
 import numpy as np
 import cv2
@@ -13,6 +11,10 @@ import json
 import pathlib
 import os
 from datetime import datetime
+import asyncstdlib as a
+
+from detector import Detector, DetectorResult
+from bounding_boxes import BoundingBoxSplitter
 
 ALARM_JAVASCRIPT_STRING_IMPORT_FILEPATH: pathlib.Path = pathlib.Path(__file__).parent / "alarm.js"
 ALARM_JAVASCRIPT_STRING_IMPORT = ALARM_JAVASCRIPT_STRING_IMPORT_FILEPATH.read_text(encoding="utf-8")
@@ -136,15 +138,16 @@ class WebApp:
 
     def _start(self):
         self.logger.info("Starting web app")
-        self.read_results_task = asyncio.create_task(asyncio.to_thread(self._read_results))
+        self.read_results_task = asyncio.create_task(self._read_results())
 
     async def _shutdown(self):
         self.logger.info("Shutting down web app...")
-        self.detector.force_stop()
-        await self.read_results_task
-        await asyncio.to_thread(lambda: self.detector.wait_finished())
+        self.detector.stop(force=True)
+        await asyncio.gather(
+            self.read_results_task,
+            self.detector.wait_finished(),
+        )
         self.logger.info("Finished shutting down web app")
-        
     
     def get_video_stream(self):
         total_skipped_frames = 0
@@ -243,7 +246,6 @@ class WebApp:
                     { "name": "frames_read", "value": self.detector.total_frames_read },
                     { "name": "frames_dropped", "value": self.detector.total_frames_dropped },
                     { "name": "frames_processed", "value": self.detector.total_frames_processed },
-                    { "name": "threads_running", "value": self.detector.total_threads_running },
                 ]
             rows = create_rows()
             table = ui.table(columns=columns, rows=rows, row_key="name")
@@ -564,9 +566,9 @@ class WebApp:
                 return Response(status_code=404)
             return Response(content=snapshot.image_data, media_type=SNAPSHOT_WEB_MEDIA_TYPE)
 
-    def _read_results(self):
-        with self.detector:
-            for frame_number, result in enumerate(self.detector.get_results_blocking()):
+    async def _read_results(self):
+        async with self.detector:
+            async for frame_number, result in a.enumerate(self.detector.get_results()):
                 probs_threshold = self.probs_threshold
                 snapshot = Snapshot(result, frame_number, probs_threshold)
                 history_entry = HistoryEntry(result, frame_number, probs_threshold)
