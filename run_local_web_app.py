@@ -25,6 +25,7 @@ def main():
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("video", type=str, help="Filepath or url of video stream")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for web app to run on")
     parser.add_argument("--port", type=int, default=8080, help="Port for web app to run on")
     parser.add_argument("--model", type=str, default="./model/printguard_model_f32.onnx", help="Filepath of onnx model")
     parser.add_argument("--model-metadata", type=str, default="./model/metadata.json", help="Filepath of model metadata")
@@ -74,7 +75,7 @@ def main():
     bbox_splitter = BoundingBoxSplitter.load_from_json(bbox_config_json)
 
     web_app = WebApp(model, bbox_splitter, args.video)
-    ui.run(port=args.port)
+    ui.run(host=args.host, port=args.port)
 
 if __name__ in {"__main__", "__mp_main__"}:
     main()

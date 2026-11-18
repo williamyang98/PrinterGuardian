@@ -27,6 +27,7 @@ async def main():
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--ip", type=str, default="192.168.1.130", help="IP address of Centauri Carbon printer")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="IP for web app to run on")
     parser.add_argument("--port", type=int, default=8080, help="Port for web app to run on")
     parser.add_argument("--model", type=str, default="./model/printguard_model_f32.onnx", help="Filepath of onnx model")
     parser.add_argument("--model-metadata", type=str, default="./model/metadata.json", help="Filepath of model metadata")
@@ -93,7 +94,7 @@ async def main():
 
     web_app = WebApp(model, bbox_splitter, video_url)
     app.on_shutdown(disconnect_printer)
-    ui.run(port=args.port)
+    ui.run(host=args.host, port=args.port)
 
 if __name__ in {"__main__", "__mp_main__"}:
     asyncio.run(main())
