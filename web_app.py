@@ -196,8 +196,10 @@ class WebApp:
                 command = self.video_stream_commands.get(block=True)
                 if command == VideoStreamCommand.RECONNECT:
                     try:
-                        self.is_stream_live = True
+                        self.is_stream_live = False
                         for frame in connect_and_read():
+                            if not self.is_stream_live:
+                                self.is_stream_live = True
                             yield frame
                     except Exception as ex:
                         error_trace = traceback.format_exc()
