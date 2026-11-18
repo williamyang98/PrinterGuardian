@@ -265,13 +265,6 @@ class WebApp:
                 field.bind_value(self, "is_auto_reconnect")
                 field.classes("min-w-10")
 
-                field = ui.checkbox("Error raised", on_change=lambda e: self._changed_error_raised())
-                field.bind_value(self, "error_raised")
-                field.classes("min-w-10")
-
-                alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
-                notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
-
         def create_delete_dialog(message):
             with ui.dialog() as dialog, ui.card() as card:
                 ui.label(message)
@@ -282,6 +275,13 @@ class WebApp:
 
         def create_button_controls():
             with ui.row():
+                field = ui.switch("Alarm", on_change=lambda e: self._changed_error_raised())
+                field.bind_value(self, "error_raised")
+                field.classes("min-w-10")
+
+                alarm_arm_message = "⚠️Close this notification to arm alarm and receive noise alerts⚠️"
+                notification = ui.notification(alarm_arm_message, timeout=None, close_button=True, on_dismiss=lambda e: arm_alarm())
+
                 async def confirm_clear_failures():
                     total_failures = len(self.failure_snapshots)
                     dialog = create_delete_dialog(f"Are you sure you want to clear entire failure history with {total_failures} snapshots")
