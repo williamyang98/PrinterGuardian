@@ -21,7 +21,15 @@ Web application to monitor Elegoo Centauri Carbon's webcam for spaghetti 3D prin
 - For help run: ```python [file] --help```
 - There are test files in ```/data``` which can be used with the above commands
 - There are bounding box configurations in ```/configs``` which can be passed via ```--bbox-config [path]```
-- To use non-GPU based onnxruntime for inference install regular cpu based onnxruntime package by commenting the line ```onnxruntime==x.x.x``` in the file ```requirements.txt``` and install dependencies with ```pip install -r requirements.txt```
+
+### Changing or adding onnxruntime execution providers
+To use a different onnxruntime for inference install reference to the other commented out ```onnxruntime-?==x.x.x``` packages in ```requirements.txt```
+
+| Package Name | Version | Description |
+| --- | --- | --- |
+| ```onnxruntime``` | ```1.32.0``` | Always installed base package for CPU cross-platform runtime |
+| ```onnxruntime-webgpu``` | ```1.27.0``` | WebGPU based GPU accelerated cross-platform runtime |
+| ```onnxruntime-directml``` | ```1.24.4``` | DirectML GPU accelerated Windows only runtime (Slightly faster) |
 
 ### Attributions
 - [oliverbravery/Edge-FDM-Fault-Detection](https://github.com/oliverbravery/Edge-FDM-Fault-Detection): AI model is based off their paper

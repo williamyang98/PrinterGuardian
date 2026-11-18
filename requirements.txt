@@ -1,6 +1,7 @@
 ### python 3.13.2
-#onnxruntime==1.32.0
-onnxruntime-directml==1.24.4
+onnxruntime==1.32.0
+onnxruntime-webgpu==1.27.0
+#onnxruntime-directml==1.24.4
 numpy==2.5.4
 tabulate==0.10.0
 #pycentauri==0.9.1
