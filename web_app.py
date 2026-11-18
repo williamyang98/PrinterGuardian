@@ -130,6 +130,7 @@ class WebApp:
         self.failure_snapshots = []
         self.history = []
         self.total_frames_skipped = 0
+        self.is_auto_reconnect = True
 
         self.video_stream_commands = queue.Queue(maxsize=1) # VideoStreamCommand
         self.is_stream_live = False
@@ -191,7 +192,7 @@ class WebApp:
             capture.release()
 
         try:
-            while True:
+            while not self.is_shutting_down:
                 command = self.video_stream_commands.get(block=True)
                 if command == VideoStreamCommand.RECONNECT:
                     try:
@@ -204,6 +205,8 @@ class WebApp:
                     finally:
                         self.is_stream_live = False
                         self.video_stream_disconnects += 1
+                    if self.is_auto_reconnect:
+                        self._video_stream_send_command(VideoStreamCommand.RECONNECT)
                 elif command == VideoStreamCommand.TERMINATE:
                     break
         except queue.ShutDown:
@@ -256,6 +259,10 @@ class WebApp:
 
                 field = ui.checkbox("Show bounding boxes", on_change=lambda e: self._refresh_svg_bboxes())
                 field.bind_value(self, "show_bbox")
+                field.classes("min-w-10")
+
+                field = ui.checkbox("Auto reconnect")
+                field.bind_value(self, "is_auto_reconnect")
                 field.classes("min-w-10")
 
                 field = ui.checkbox("Error raised", on_change=lambda e: self._changed_error_raised())
